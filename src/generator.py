@@ -16,8 +16,9 @@ class StoryGenerator:
         self.story_context = {}
         # 记忆系统：用于存储故事梗概和伏笔
         self.story_memory = {
-            'summary': [],       # 已经发生的故事概要（按章节）
-            'foreshadowing': []  # 埋下的伏笔（未回收）
+            'summary': [],          # 已经发生的故事概要（按章节）
+            'foreshadowing': [],    # 埋下的伏笔（未回收）
+            'chapter_endings': []   # 每章结尾的细粒度状态（位置/情绪/关系/钩子）
         }
 
     def _build_system_prompt(self):
@@ -217,11 +218,13 @@ class StoryGenerator:
         
         要求:
         对于列表中的每一章，请撰写 300-500 字的详细事件摘要。
-        包含：
+        包含（顺序如下）：
+        - 因果开篇 (Causal Hook): **必须**以「因为上一章发生了【X】，本章开始时【Y】」的句式开头，明确与前一章的因果驱动关系。（第一章除外）
         - 关键事件 (Key Events)
         - 冲突点 (Conflict)
         - 伏笔与揭秘 (Secrets)
         - 爽点/情感爆发点 (Highlights)
+        - 结尾钩子 (Ending Hook): 本章结尾留下的悬念或情绪，为下一章做铺垫。
         
         输出格式:
         请直接输出 Markdown 格式的文本。
@@ -326,36 +329,78 @@ class StoryGenerator:
         章节内容:
         {chapter_text[:5000]}... (由于长度限制仅展示部分/或请假设已阅读全文)
         
-        请输出一个 YAML 格式的总结，包含以下字段:
+        请输出一个 YAML 格式的总结，严格包含以下字段（所有字段均必须填写）:
         summary: 本章发生的关键剧情梗概（100字以内）。
-        new_foreshadowing: 本章埋下的新伏笔或悬念（列表）。
-        resolved_foreshadowing: 本章回收或解释了哪些之前的伏笔（列表）。
+        new_foreshadowing: 本章埋下的新伏笔或悬念（列表，没有则为空列表 []）。
+        resolved_foreshadowing: 本章回收或解释了哪些之前的伏笔（列表，没有则为空列表 []）。
+        chapter_ending:
+          location: 本章结尾时，主要人物所在的场景或地点（一句话）。
+          character_states:
+            人物A姓名: 该人物在本章结尾的情绪与状态（一句话）。
+            人物B姓名: 该人物在本章结尾的情绪与状态（一句话）。
+          relationship_progress: 主要人物之间的关系在本章结束后的状态（一句话）。
+          ending_hook: 本章最后留下的悬念或情绪钩子，用于引出下一章（一句话）。
         """
         
         try:
             response = self.llm.generate_content(prompt)
-             # 简单的解析逻辑，实际应用中可能需要更强的鲁棒性
             import yaml
             clean_response = response.replace("```yaml", "").replace("```", "").strip()
             data = yaml.safe_load(clean_response)
             
             if data:
                 self.story_memory['summary'].append(f"第 {chapter_num} 章: {data.get('summary', '无')}")
+                
                 # 添加新伏笔
-                for f in data.get('new_foreshadowing', []):
-                    self.story_memory['foreshadowing'].append(f)
-                # 尝试标记已回收的伏笔 (这里简单打印日志，实际可从列表中移除)
-                resolved = data.get('resolved_foreshadowing', [])
+                for foreshadow in data.get('new_foreshadowing', []) or []:
+                    self.story_memory['foreshadowing'].append(foreshadow)
+                
+                # 真正从列表中移除已回收的伏笔（前缀模糊匹配，避免误删）
+                resolved = data.get('resolved_foreshadowing', []) or []
                 if resolved:
                     logger.info(f"回收伏笔: {resolved}")
-                    # 简单实现：仅在内存中记录，不做复杂匹配移除，以免误删
-                    self.story_memory['summary'].append(f"[回收伏笔] {resolved}")
+                    before_count = len(self.story_memory['foreshadowing'])
+                    self.story_memory['foreshadowing'] = [
+                        f for f in self.story_memory['foreshadowing']
+                        if not any(str(r)[:15] in str(f) for r in resolved)
+                    ]
+                    after_count = len(self.story_memory['foreshadowing'])
+                    logger.info(f"伏笔列表从 {before_count} 条减少到 {after_count} 条。")
+                
+                # 保存细粒度章节结尾状态
+                ending = data.get('chapter_ending', {}) or {}
+                if ending:
+                    ending['chapter'] = chapter_num
+                    if 'chapter_endings' not in self.story_memory:
+                        self.story_memory['chapter_endings'] = []
+                    self.story_memory['chapter_endings'].append(ending)
+                    logger.info(f"已保存第 {chapter_num} 章结尾状态: {ending.get('location', '未知')}")
                     
         except Exception as e:
             logger.error(f"更新记忆失败: {e}")
         
         # Save memory after update
         self.save_memory()
+
+    def _get_chapter_ending(self, chapter_num):
+        """从记忆中取指定章节的结尾状态，格式化为可注入 Prompt 的文本。"""
+        endings = self.story_memory.get('chapter_endings', [])
+        for ending in reversed(endings):  # 倒序查找最近的记录
+            if ending.get('chapter') == chapter_num:
+                char_states = ending.get('character_states', {})
+                if isinstance(char_states, dict):
+                    char_states_str = "\n".join(
+                        f"  - {name}: {state}" for name, state in char_states.items()
+                    )
+                else:
+                    char_states_str = str(char_states)
+                return (
+                    f"地点: {ending.get('location', '未知')}\n"
+                    f"人物状态:\n{char_states_str}\n"
+                    f"关系进展: {ending.get('relationship_progress', '未知')}\n"
+                    f"结尾钩子: {ending.get('ending_hook', '未知')}"
+                )
+        return ""  # 没有记录则返回空
 
     def save_memory(self):
         """Persist story memory to disk."""
@@ -381,50 +426,66 @@ class StoryGenerator:
                 logger.error(f"加载记忆失败: {e}")
 
     def _generate_section_content(self, chapter_num, section_num, total_sections, chapter_summary, previous_context, chapter_title="", core_plot=""):
-        # 截取最近的上下文（例如最后2000字），避免 Token 过长
-        recent_context = previous_context[-2000:] if len(previous_context) > 2000 else previous_context
+        # 截取最近的上下文（最后3000字，比原来的2000字更多），保留更多前文信息
+        recent_context = previous_context[-3000:] if len(previous_context) > 3000 else previous_context
         
-        prompt = self._build_system_prompt() + f"""
+        # 跨章节衔接：仅在每章第一节，注入上一章的细粒度结尾状态
+        cross_chapter_context = ""
+        if section_num == 1 and chapter_num > 1:
+            prev_ending = self._get_chapter_ending(chapter_num - 1)
+            if prev_ending:
+                cross_chapter_context = (
+                    f"\n        ⚠️【跨章衔接（极其重要）】上一章（第 {chapter_num - 1} 章）结尾状态:\n"
+                    f"        {prev_ending}\n"
+                    f"\n        本章第一节必须从上述状态无缝延续，不得与之矛盾。\n"
+                    f"        人物情绪、所在地点、关系进展必须保持一致，不可凭空跳跃或重置。\n"
+                )
+            else:
+                import logging
+                logging.getLogger(__name__).debug(f"第 {chapter_num} 章第一节：未找到第 {chapter_num - 1} 章结尾状态，跳过跨章注入。")
         
-        当前任务: 撰写 {chapter_title} 的 第 {section_num}/{total_sections} 节。
+        # 近期摘要：只取最近5章，避免列表过长降低信噪比
+        recent_summaries = self.story_memory["summary"][-5:]
+        active_foreshadowing = self.story_memory["foreshadowing"]
         
-        【核心剧情 (Core Context)】:
-        {core_plot or "未提供。"}
+        continuity_section = (
+            "        【故事记忆 (Continuity & Foreshadowing)】:\n"
+            f"        近期剧情回顾（最近5章）: {recent_summaries}\n"
+            f"        当前活跃的伏笔/悬念: {active_foreshadowing}"
+        )
         
-        【本章详细设定 (Local Context)】:
-        {chapter_summary}
-        
-        【重要】故事记忆 (Continuity & Foreshadowing):
-        历史剧情梗概: {self.story_memory['summary']}
-        当前活跃的伏笔/悬念: {self.story_memory['foreshadowing']}
-        
-        已写内容上下文 (参考):
-        ...{recent_context}
-        
-        具体的写作目标:
-        - 如果是第 1 节：请精彩开篇，迅速入戏。
-        - 如果是第 {total_sections} 节：请做好本章的高潮或收尾，为下一章留下悬念。
-        - 中间小节：保持节奏推进，承上启下。
-        
-        指令:
-        请撰写第 {section_num} 节的正文内容。
-        这不仅是填充内容，而是创作艺术。
-        
-        具体要求:
-        1. **开篇抓人**: 开头第一句就要将读者拉入场景中。
-        2. **场景构建**: 运用环境描写来烘托氛围，反映人物心境。
-        3. **节奏把控**: 动作场面要紧凑刺激，情感文戏要细腻动人。张弛有度。
-        4. **代入感**: 始终紧扣配置设定中的“视角”，让读者与主角同呼吸共命运。
-        5. **拒绝AI味**: 避免刻板的连接词和总结性陈述，让故事自然流淌。
-        6. **连贯性与伏笔**: 
-           - 必须考虑“历史剧情梗概”保持逻辑连贯。
-           - 有机地呼应“当前活跃的伏笔”。
-           - 适当埋设新的伏笔，通过“展示”而非“说明”。
-        
-        请直接输出高质量的小说正文内容，不要包含任何大纲回顾、章节标题或其他元数据。
-        """
+        prompt = self._build_system_prompt() + (
+            f"\n\n        当前任务: 撰写 {chapter_title} 的 第 {section_num}/{total_sections} 节。\n"
+            f"\n        【核心剧情 (Core Context)】:\n"
+            f"        {core_plot or '未提供。'}\n"
+            f"\n        【本章详细设定 (Local Context)】:\n"
+            f"        {chapter_summary}\n"
+            f"{cross_chapter_context}"
+            f"\n{continuity_section}\n"
+            f"\n        已写内容上下文（本章前文）:\n"
+            f"        ...{recent_context}\n"
+            f"\n        具体的写作目标:\n"
+            f"        - 如果是第 1 节：请精彩开篇，迅速入戏。\n"
+            f"        - 如果是第 {total_sections} 节：请做好本章的高潮或收尾，为下一章留下悬念。\n"
+            f"        - 中间小节：保持节奏推进，承上启下。\n"
+            f"\n        指令:\n"
+            f"        请撰写第 {section_num} 节的正文内容。\n"
+            f"        这不仅是填充内容，而是创作艺术。\n"
+            f"\n        具体要求:\n"
+            f"        1. **开篇抓人**: 开头第一句就要将读者拉入场景中。\n"
+            f"        2. **场景构建**: 运用环境描写来烘托氛围，反映人物心境。\n"
+            f"        3. **节奏把控**: 动作场面要紧凑刺激，情感文戏要细腻动人。张弛有度。\n"
+            f"        4. **代入感**: 始终紧扣配置设定中的视角，让读者与主角同呼吸共命运。\n"
+            f"        5. **拒绝AI味**: 避免刻板的连接词和总结性陈述，让故事自然流淌。\n"
+            f"        6. **连贯性与伏笔**:\n"
+            f"           - 必须参考跨章衔接和近期剧情回顾保持逻辑连贯，人物的情绪/位置/关系进展不得突变。\n"
+            f"           - 有机地呼应当前活跃的伏笔，优先回收最早埋下的伏笔。\n"
+            f"           - 适当埋设新的伏笔，通过展示而非说明。\n"
+            f"\n        请直接输出高质量的小说正文内容，不要包含任何大纲回顾、章节标题或其他元数据。\n"
+        )
         
         return self.llm.generate_content(prompt)
+
 
     def run(self):
         # RESUME CHECK: Try to load existing outline
