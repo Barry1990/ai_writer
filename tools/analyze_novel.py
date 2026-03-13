@@ -3,6 +3,7 @@ import re
 import yaml
 import sys
 import logging
+import argparse
 
 # 将项目根目录添加到路径，以便导入 src 模块
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
@@ -25,9 +26,12 @@ def load_text(filepath):
             return f.read()
     return ""
 
-def get_all_sections(output_dir="output"):
+def get_all_sections(output_dir):
     """按顺序获取所有小节的信息。"""
     all_sections = []
+    if not os.path.exists(output_dir):
+        return []
+        
     chapter_dirs = [d for d in os.listdir(output_dir) if os.path.isdir(os.path.join(output_dir, d)) and "第" in d and "章" in d]
     chapter_dirs.sort(key=natural_sort_key)
     
@@ -53,9 +57,9 @@ def extract_edges(text, lines=15):
     tail = "\n".join(all_lines[-lines:])
     return head, tail
 
-def analyze_novel(output_dir="output"):
-    setup_logging(log_file="novel_analysis.log")
-    logger.info("开始进行小说衔接连贯性专项分析...")
+def analyze_novel(output_dir):
+    setup_logging(log_file=os.path.join(output_dir, "novel_analysis.log"))
+    logger.info(f"开始对目录 {output_dir} 进行小说衔接连贯性专项分析...")
     
     if not os.path.exists(output_dir):
         print(f"找不到输出目录: {output_dir}")
@@ -140,4 +144,22 @@ def analyze_novel(output_dir="output"):
         print(f"分析过程中发生错误: {e}")
 
 if __name__ == "__main__":
-    analyze_novel()
+    parser = argparse.ArgumentParser(description="分析小说衔接性")
+    parser.add_argument("--dir", help="小说内容所在目录 (例如 output/我的小说)", default=None)
+    args = parser.parse_args()
+
+    target_dir = args.dir
+    if not target_dir:
+        # Default to the most recently modified directory in output/
+        base_output = "output"
+        if os.path.exists(base_output):
+            subdirs = [os.path.join(base_output, d) for d in os.listdir(base_output) if os.path.isdir(os.path.join(base_output, d))]
+            if subdirs:
+                subdirs.sort(key=os.path.getmtime, reverse=True)
+                target_dir = subdirs[0]
+                print(f"No directory specified. Using most recent: {target_dir}")
+    
+    if target_dir:
+        analyze_novel(target_dir)
+    else:
+        print("Error: No directory found to analyze. Please specify with --dir")

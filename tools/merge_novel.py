@@ -3,6 +3,8 @@ import re
 import yaml
 import sys
 
+import argparse
+
 def load_config(config_path):
     """Loads configuration from a YAML file."""
     if not os.path.exists(config_path):
@@ -14,34 +16,39 @@ def load_config(config_path):
         print(f"Error loading config {config_path}: {e}")
         return None
 
-def get_novel_title(configs_dir="configs"):
+def get_novel_title(output_dir, configs_dir="configs"):
     """
-    Finds the most recently modified config file in the configs directory
-    and extracts the novel title.
+    Attempts to find the novel title.
+    1. From outline_structure.yaml if it exists in output_dir.
+    2. From the most recently modified config file.
     """
-    if not os.path.exists(configs_dir):
-        return "Merged_Novel"
+    
+    # Priority 1: Check output_dir for existing structure info
+    structure_path = os.path.join(output_dir, "outline_structure.yaml")
+    if os.path.exists(structure_path):
+        config = load_config(structure_path)
+        if config and 'novel_title' in config: # If we added it there (planning to)
+             return config['novel_title']
+        
+    # Check outline.txt for a title? Usually "### 第1章" style, hard to parse title from filename.
+    # Fallback to config scanning
+    if os.path.exists(configs_dir):
+        yaml_files = [
+            os.path.join(configs_dir, f) 
+            for f in os.listdir(configs_dir) 
+            if f.endswith('.yaml') or f.endswith('.yml')
+        ]
+        
+        if yaml_files:
+            # Sort by modification time, newest first
+            yaml_files.sort(key=os.path.getmtime, reverse=True)
+            for cfg_path in yaml_files:
+                config = load_config(cfg_path)
+                if config and '故事' in config and '标题' in config['故事']:
+                    return config['故事']['标题']
 
-    yaml_files = [
-        os.path.join(configs_dir, f) 
-        for f in os.listdir(configs_dir) 
-        if f.endswith('.yaml') or f.endswith('.yml')
-    ]
-    
-    if not yaml_files:
-        return "Merged_Novel"
-
-    # Sort by modification time, newest first
-    yaml_files.sort(key=os.path.getmtime, reverse=True)
-    
-    latest_config_path = yaml_files[0]
-    print(f"Using configuration file: {latest_config_path}")
-    
-    config = load_config(latest_config_path)
-    if config and '故事' in config and '标题' in config['故事']:
-        return config['故事']['标题']
-    
-    return "Merged_Novel"
+    # Final fallback: use the directory name itself
+    return os.path.basename(os.path.abspath(output_dir))
 
 def natural_sort_key(s):
     """
@@ -53,15 +60,16 @@ def natural_sort_key(s):
         return int(numbers[0])
     return 0
 
-def merge_novel(output_dir="output"):
+def merge_novel(output_dir):
     if not os.path.exists(output_dir):
         print(f"Output directory '{output_dir}' not found.")
         return
 
-    novel_title = get_novel_title()
-    output_filename = f"{novel_title}.txt"
+    novel_title = get_novel_title(output_dir)
+    output_filename = os.path.join(output_dir, f"{novel_title}.txt")
     
-    print(f"Merging novel '{novel_title}' from '{output_dir}'...")
+    print(f"Merging novel from '{output_dir}'...")
+    print(f"Novel Title: {novel_title}")
 
     merged_content = []
     
@@ -78,11 +86,14 @@ def merge_novel(output_dir="output"):
     # Sort chapters by number
     chapters.sort(key=natural_sort_key)
 
+    if not chapters:
+        print(f"No chapters found in '{output_dir}'.")
+        return
+
     for chapter_dir_name in chapters:
         chapter_path = os.path.join(output_dir, chapter_dir_name)
         
-        # Add Chapter Title (the directory name usually contains it)
-        # Format: 第X章_Title -> 第X章 Title
+        # Add Chapter Title
         chapter_title_formatted = chapter_dir_name.replace('_', ' ')
         merged_content.append(f"\n\n{chapter_title_formatted}\n\n")
         print(f"Processing {chapter_dir_name}...")
@@ -115,4 +126,22 @@ def merge_novel(output_dir="output"):
         print(f"Error writing output file: {e}")
 
 if __name__ == "__main__":
-    merge_novel()
+    parser = argparse.ArgumentParser(description="合并小说章节")
+    parser.add_argument("--dir", help="小说内容所在目录 (例如 output/我的小说)", default=None)
+    args = parser.parse_args()
+
+    target_dir = args.dir
+    if not target_dir:
+        # Default to the most recently modified directory in output/
+        base_output = "output"
+        if os.path.exists(base_output):
+            subdirs = [os.path.join(base_output, d) for d in os.listdir(base_output) if os.path.isdir(os.path.join(base_output, d))]
+            if subdirs:
+                subdirs.sort(key=os.path.getmtime, reverse=True)
+                target_dir = subdirs[0]
+                print(f"No directory specified. Using most recent: {target_dir}")
+    
+    if target_dir:
+        merge_novel(target_dir)
+    else:
+        print("Error: No directory found to merge. Please specify with --dir")

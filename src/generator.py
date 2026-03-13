@@ -11,7 +11,21 @@ logger = logging.getLogger(__name__)
 class StoryGenerator:
     def __init__(self, config, output_dir="output"):
         self.config = config
-        self.output_dir = output_dir
+        
+        # 提取小说标题并创建专用文件夹
+        novel_title = "未命名小说"
+        if isinstance(config.get('故事'), dict):
+            novel_title = config.get('故事', {}).get('标题', '未命名小说')
+        elif isinstance(config.get('基本信息'), dict): # 兼容旧格式或不同层级
+             novel_title = config.get('基本信息', {}).get('标题', '未命名小说')
+
+        # 清洗文件夹名称，移除非法字符
+        safe_title = "".join([c for c in novel_title if c.isalnum() or c in (' ', '_', '-')]).strip()
+        self.output_dir = os.path.join(output_dir, safe_title)
+        os.makedirs(self.output_dir, exist_ok=True)
+        
+        logger.info(f"项目输出目录设定为: {self.output_dir}")
+
         self.llm = get_llm_client(config.get('llm'))
         self.story_context = {}
         # 记忆系统：用于存储故事梗概和伏笔
@@ -191,19 +205,61 @@ class StoryGenerator:
         for attempt in range(max_retries):
             try:
                 response = self.llm.generate_content(prompt, generation_config={"max_output_tokens": 8192}) # Skeleton is cheap, 8k is enough for 100+ chapters
-                import yaml
-                clean_response = response.replace("```yaml", "").replace("```", "").strip()
-                skeleton = yaml.safe_load(clean_response)
+                skeleton = self._safe_parse_yaml_list(response)
                 
-                if isinstance(skeleton, list) and len(skeleton) >= target_count * 0.9: # Allow small margin of error
+                if isinstance(skeleton, list) and len(skeleton) >= target_count * 0.8: # Allow small margin of error
                     logger.info(f"骨架生成成功，共 {len(skeleton)} 章。")
                     return skeleton[:target_count] # Enforce exact count if over-generated
                 else:
                     logger.warning(f"骨架生成数量不符或格式错误 (Attempt {attempt+1}): {len(skeleton) if isinstance(skeleton, list) else 'Invalid'}")
             except Exception as e:
-                logger.error(f"骨架生成解析失败: {e}")
+                logger.error(f"骨架生成处理失败: {e}")
                 
         raise ValueError("无法生成有效的章节骨架，请检查配置或网络。")
+
+    def _safe_parse_yaml_list(self, text):
+        """更健壮地从 LLM 返回文本中提取并解析 YAML 列表。"""
+        import yaml
+        
+        # 1. 优先尝试从 Markdown 代码块提取
+        yaml_block_match = re.search(r"```(?:yaml|json)?\s*(.*?)```", text, re.DOTALL)
+        if yaml_block_match:
+            try:
+                data = yaml.safe_load(yaml_block_match.group(1))
+                if isinstance(data, list): return data
+            except: pass
+
+        # 2. 尝试清洗整体文本（移除干扰信息）
+        clean_text = text.replace("```yaml", "").replace("```json", "").replace("```", "").strip()
+        try:
+            data = yaml.safe_load(clean_text)
+            if isinstance(data, list): return data
+        except: pass
+
+        # 3. 兜底方案：行正则解析 (针对常见的 - key: value 格式)
+        logger.warning("YAML 解析失败，尝试使用正则降级解析...")
+        items = []
+        current_item = {}
+        
+        # 匹配 "- key: value" 或 "  key: value"
+        # 针对 Logline 这种可能包含冒号或特殊字符的情况，使用懒惰匹配
+        pattern = re.compile(r"^\s*-\s*([^:]+):\s*(.*)|^\s*([^:]+):\s*(.*)")
+        
+        for line in clean_text.split('\n'):
+            line = line.strip()
+            if not line: continue
+            
+            match = pattern.match(line)
+            if match:
+                groups = match.groups()
+                if groups[0] is not None: # 开始新项
+                    if current_item: items.append(current_item)
+                    current_item = {groups[0].strip(): groups[1].strip().strip('"').strip("'")}
+                elif groups[2] is not None: # 当前项的属性
+                    current_item[groups[2].strip()] = groups[3].strip().strip('"').strip("'")
+        
+        if current_item: items.append(current_item)
+        return items
 
     def _expand_chapter_batch(self, core_plot, batch_chapters):
         prompt = self._build_system_prompt() + f"""
@@ -621,17 +677,11 @@ class StoryGenerator:
         generation_config = {"max_output_tokens": 81920}
         
         response = self.llm.generate_content(prompt, generation_config=generation_config)
-        try:
-            import yaml
-            # Clean possible markdown code blocks
-            clean_response = response.replace("```yaml", "").replace("```", "").strip()
-            chapters = yaml.safe_load(clean_response)
-            if isinstance(chapters, list):
-                logger.info(f"成功提取了 {len(chapters)} 章 (目标: {target_count})")
-                return chapters
-            else:
-                logger.warning("无法将章节计划解析为列表，返回空列表。")
-                return []
-        except Exception as e:
-            logger.error(f"解析章节计划时出错: {e}")
+        
+        chapters = self._safe_parse_yaml_list(response)
+        if isinstance(chapters, list) and chapters:
+            logger.info(f"成功提取了 {len(chapters)} 章 (目标: {target_count})")
+            return chapters
+        else:
+            logger.warning("无法将章节计划解析为列表，返回空列表。")
             return []
