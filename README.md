@@ -30,6 +30,9 @@ cp .env.example .env
 
 `.env` 完整配置示例：
 ```env
+# 默认提供商 (openai 或 gemini)
+LLM_PROVIDER=openai
+
 # OpenAI 配置
 OPENAI_API_KEY=your_openai_api_key
 OPENAI_BASE_URL=https://api.your-proxy.com/v1  # 可选：自定义中转地址

@@ -115,7 +115,10 @@ class OpenAIClient(LLMClient):
             
             return content
         except Exception as e:
-            logger.error(f"调用 OpenAI API 时发生错误: {e}")
+            if "insufficient" in str(e).lower() or "balance" in str(e).lower():
+                logger.error("❌ OpenAI API 余额不足：请检查您的账户余额或充值。")
+            else:
+                logger.error(f"调用 OpenAI API 时发生错误: {e}")
             raise
 
 def get_llm_client(llm_config=None):
@@ -132,7 +135,10 @@ def get_llm_client(llm_config=None):
     if not llm_config:
         llm_config = {}
 
-    provider = llm_config.get('provider', 'gemini').lower()
+    # 优先级：配置文件 > 环境变量 LLM_PROVIDER > 默认 'gemini'
+    provider = llm_config.get('provider') or os.environ.get("LLM_PROVIDER", "gemini")
+    provider = provider.lower()
+    
     model = llm_config.get('model')
     api_key = llm_config.get('api_key')
     
