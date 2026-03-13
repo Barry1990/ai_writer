@@ -15,8 +15,6 @@
 
 ```bash
 pip install -r requirements.txt
-# 如果需要使用 OpenAI 驱动
-pip install openai
 ```
 
 ### 2. 配置 API Key
@@ -80,12 +78,20 @@ llm:
   model: gpt-4o
 ```
 
-## 项目结构
+## 辅助工具
 
-- `src/llm.py`: LLM 驱动抽象层及实现。
-- `src/generator.py`: 核心生成逻辑及记忆系统。
-- `configs/`: 预设的故事模板和配置。
-- `output/`: 生成的故事正文、大纲及记忆文件。
+### 1. 合并小说 (`tools/merge_novel.py`)
+将 `output/` 目录下散落的章节和小节合并为一个完整的 `.txt` 文件。
+```bash
+python tools/merge_novel.py
+```
+
+### 2. 连贯性分析 (`tools/analyze_novel.py`)
+调用 AI 对已生成的小说进行深度分析，评估剧情连贯性、人物一致性并打分。
+```bash
+python tools/analyze_novel.py
+```
+分析结果将保存在 `output/analysis_report.md` 中。
 
 ## 许可
 
