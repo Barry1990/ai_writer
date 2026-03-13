@@ -2,7 +2,7 @@ import logging
 import os
 import yaml
 import re
-from .llm import GeminiClient
+from .llm import get_llm_client
 
 from .utils import save_file
 
@@ -12,7 +12,7 @@ class StoryGenerator:
     def __init__(self, config, output_dir="output"):
         self.config = config
         self.output_dir = output_dir
-        self.llm = GeminiClient()
+        self.llm = get_llm_client(config.get('llm'))
         self.story_context = {}
         # 记忆系统：用于存储故事梗概和伏笔
         self.story_memory = {

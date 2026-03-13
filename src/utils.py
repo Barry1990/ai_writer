@@ -1,9 +1,13 @@
 import logging
 import os
 import yaml
+from dotenv import load_dotenv
 
 def setup_logging(log_level=logging.INFO, log_file="ai_writer.log"):
-    """Sets up logging configuration."""
+    """Sets up logging configuration and loads environment variables."""
+    # Load environment variables from .env file
+    load_dotenv()
+    
     # Create a logger
     logger = logging.getLogger()
     logger.setLevel(log_level)
