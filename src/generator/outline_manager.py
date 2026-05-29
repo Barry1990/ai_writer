@@ -121,11 +121,15 @@ class OutlineManager:
         chapters_text = parts[1].strip() if len(parts) > 1 else ""
         
         chapter_map = {}
-        header_pattern = r"###\s*(第\s*[0-9一二三四五六七八九十百]+\s*章.*|Chapter\s*\d+.*)"
+        # 优化正则表达式，支持 "第1章", "1.", "Chapter 1" 等格式
+        header_pattern = r"###\s*(第?\s*\d+\s*[章.]?|第?\s*[一二三四五六七八九十百]+\s*[章.]?|Chapter\s*\d+).*"
         matches = list(re.finditer(header_pattern, chapters_text))
         
+        if not matches:
+             logger.warning("未在大纲中解析到任何章节标题，请检查大纲格式。")
+        
         for i, match in enumerate(matches):
-            header = match.group(1).strip()
+            header = match.group(0).replace("###", "").strip()
             start_pos = match.end()
             end_pos = matches[i+1].start() if i + 1 < len(matches) else len(chapters_text)
             
@@ -144,8 +148,10 @@ class OutlineManager:
                         break
             
             if chapter_num != -1:
+                # 清理标题，移除 "第1章：" 等前缀
+                clean_title = re.sub(r"^(第?\s*\d+\s*[章.]?\s*[:：]?\s*|Chapter\s*\d+\s*[:：]?\s*)", "", header).strip()
                 chapter_map[chapter_num] = {
-                    'title': header,
+                    'title': clean_title or header, # 如果清理后为空则保留原样
                     'content': content
                 }
             else:
@@ -173,12 +179,16 @@ class OutlineManager:
                 with open(outline_path, 'r', encoding='utf-8') as f:
                     outline = f.read()
                 
-                structure = None
                 structure_path = os.path.join(self.output_dir, "outline_structure.yaml")
                 if os.path.exists(structure_path):
                      with open(structure_path, 'r', encoding='utf-8') as f:
                         structure = yaml.safe_load(f)
                      logger.info("已加载结构化大纲。")
+                     
+                     # 检查结构化大纲是否完整，如果不完整（例如之前的 bug 导致解析不全），则重新解析
+                     if structure and len(structure.get('chapters', {})) < 5: # 简单阈值判断
+                         logger.info("结构化大纲可能不完整，正在重新解析...")
+                         structure = self.parse_and_save_structured_outline(outline)
                 else:
                     structure = self.parse_and_save_structured_outline(outline)
                 
@@ -193,11 +203,31 @@ class OutlineManager:
             try:
                 with open(chapter_plan_path, 'r', encoding='utf-8') as f:
                     chapter_plan = yaml.safe_load(f)
-                logger.info("已加载已有章节计划。")
-                return chapter_plan
+                if chapter_plan: # 只有非空才返回
+                    logger.info("已加载已有章节计划。")
+                    return chapter_plan
+                else:
+                    logger.warning("发现空的章节计划文件，将尝试重新提取。")
             except Exception as e:
                 logger.error(f"加载章节计划失败: {e}")
         
+        # 尝试从已解析的结构化大纲中构建计划，避免 LLM 提取失败或 Token 消耗
+        _, structure = self.load_outline()
+        if structure and structure.get('chapters'):
+            logger.info(f"正在从结构化大纲中构建章节计划...")
+            chapters = structure['chapters']
+            chapter_plan = []
+            for num in sorted(chapters.keys()):
+                chapter_plan.append({
+                    'title': chapters[num]['title'],
+                    'summary': chapters[num]['content']
+                })
+            
+            if chapter_plan:
+                with open(chapter_plan_path, 'w', encoding='utf-8') as f:
+                    yaml.dump(chapter_plan, f, allow_unicode=True)
+                return chapter_plan
+
         target_count = self.config.get('章节设置', {}).get('目标章数', 20)
         logger.info(f"正在提取章节计划 (目标章数: {target_count})...")
         
@@ -222,6 +252,9 @@ class OutlineManager:
 
     def reconcile_plan_with_disk(self, chapter_plan):
         """协调计划与磁盘上的现有目录。"""
+        if not chapter_plan:
+            return []
+            
         existing_dirs = {}
         try:
             for item in os.listdir(self.output_dir):
