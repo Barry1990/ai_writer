@@ -52,7 +52,8 @@ class OutlineManager:
         return self.llm.generate_content(prompt)
 
     def _generate_chapter_skeleton(self, system_prompt, core_plot):
-        target_count = self.config.get('章节设置', {}).get('目标章数', 20)
+        chapter_cfg = self.config.get('chapter_settings') or self.config.get('章节设置', {})
+        target_count = chapter_cfg.get('target_chapters') or chapter_cfg.get('目标章数', 20)
         logger.info(f"Phase 2: 生成章节骨架 (目标 {target_count} 章)...")
         
         prompt = get_chapter_skeleton_prompt(system_prompt, core_plot, target_count)
@@ -228,7 +229,8 @@ class OutlineManager:
                     yaml.dump(chapter_plan, f, allow_unicode=True)
                 return chapter_plan
 
-        target_count = self.config.get('章节设置', {}).get('目标章数', 20)
+        chapter_cfg = self.config.get('chapter_settings') or self.config.get('章节设置', {})
+        target_count = chapter_cfg.get('target_chapters') or chapter_cfg.get('目标章数', 20)
         logger.info(f"正在提取章节计划 (目标章数: {target_count})...")
         
         prompt = get_chapter_plan_prompt(outline, target_count)

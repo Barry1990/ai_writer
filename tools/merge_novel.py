@@ -44,8 +44,12 @@ def get_novel_title(output_dir, configs_dir="configs"):
             yaml_files.sort(key=os.path.getmtime, reverse=True)
             for cfg_path in yaml_files:
                 config = load_config(cfg_path)
-                if config and '故事' in config and '标题' in config['故事']:
-                    return config['故事']['标题']
+                if config:
+                    story_cfg = config.get('story') or config.get('故事')
+                    if isinstance(story_cfg, dict):
+                        title = story_cfg.get('title') or story_cfg.get('标题')
+                        if title:
+                            return title
 
     # Final fallback: use the directory name itself
     return os.path.basename(os.path.abspath(output_dir))

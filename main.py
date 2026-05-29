@@ -46,8 +46,9 @@ def main():
                 with open(os.path.join(configs_dir if f != root_config else ".", f), 'r', encoding='utf-8') as yml:
                     for _ in range(20):
                         line = yml.readline()
-                        if "标题:" in line:
-                            title = line.split("标题:")[1].strip().strip('"')
+                        if "标题:" in line or "title:" in line:
+                            sep = "标题:" if "标题:" in line else "title:"
+                            title = line.split(sep)[1].strip().strip('"').strip("'")
                             break
                 print(f"{idx + 1}. {f}  \t(标题: {title})")
             except:

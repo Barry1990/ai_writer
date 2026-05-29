@@ -27,8 +27,8 @@ class ChapterManager:
 
         logger.info(f"正在生成 {chapter_title}...")
         
-        chapter_config = self.config.get('章节设置', {})
-        section_count = chapter_config.get('每章小节数', 1)
+        chapter_config = self.config.get('chapter_settings') or self.config.get('章节设置', {})
+        section_count = chapter_config.get('sections_per_chapter') or chapter_config.get('每章小节数', 1)
         
         safe_dir_name = "".join([c for c in chapter_title if c.isalpha() or c.isdigit() or c in (' ', '_', '-', '.')]).strip()
         chapter_dir = os.path.join(self.output_dir, safe_dir_name)

@@ -14,10 +14,9 @@ class StoryGenerator:
         
         # 提取小说标题并创建专用文件夹
         novel_title = "未命名小说"
-        if isinstance(config.get('故事'), dict):
-            novel_title = config.get('故事', {}).get('标题', '未命名小说')
-        elif isinstance(config.get('基本信息'), dict):
-             novel_title = config.get('基本信息', {}).get('标题', '未命名小说')
+        story_cfg = config.get('story') or config.get('故事') or config.get('基本信息')
+        if isinstance(story_cfg, dict):
+            novel_title = story_cfg.get('title') or story_cfg.get('标题', '未命名小说')
 
         safe_title = "".join([c for c in novel_title if c.isalnum() or c in (' ', '_', '-')]).strip()
         self.output_dir = os.path.join(output_dir, safe_title)
