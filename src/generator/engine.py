@@ -47,10 +47,11 @@ class StoryGenerator:
         completed_chapters = self.memory_manager.get_completed_chapters()
         
         for i, chapter_info in enumerate(chapter_plan, 1):
-            if i in completed_chapters:
-                logger.info(f"第 {i} 章已记录在记忆中，跳过生成。")
+            chapter_num = chapter_info.get('chapter_num', i) if isinstance(chapter_info, dict) else i
+            if chapter_num in completed_chapters:
+                logger.info(f"第 {chapter_num} 章已记录在记忆中，跳过生成。")
                 continue
                 
             self.chapter_manager.generate_chapter_content(
-                i, chapter_info, self.system_prompt, structured_outline
+                chapter_num, chapter_info, self.system_prompt, structured_outline
             )

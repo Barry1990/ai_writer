@@ -1,4 +1,5 @@
 import os
+import json
 import logging
 from abc import ABC, abstractmethod
 
@@ -67,11 +68,22 @@ class GeminiClient(LLMClient):
             raise
 
 class OpenAIClient(LLMClient):
-    def __init__(self, api_key=None, model_name="gpt-4o", base_url=None):
+    def __init__(self, api_key=None, model_name="gpt-4o", base_url=None, extra_body=None):
         self.api_key = api_key or os.environ.get("OPENAI_API_KEY")
         if not self.api_key:
             raise ValueError("OpenAI API Key must be provided or set in OPENAI_API_KEY environment variable.")
         
+        # extra_body 支持从参数传入，或从环境变量 OPENAI_EXTRA_BODY 解析
+        self.extra_body = extra_body
+        if not self.extra_body:
+            env_extra = os.environ.get("OPENAI_EXTRA_BODY")
+            if env_extra:
+                try:
+                    self.extra_body = json.loads(env_extra)
+                    logger.info(f"OpenAI 客户端已加载 EXTRA_BODY 配置: {self.extra_body}")
+                except Exception as e:
+                    logger.warning(f"解析 OPENAI_EXTRA_BODY 失败: {e}")
+
         try:
             from openai import OpenAI
             # 支持自定义 base_url (兼容 OpenAI 的其他提供商)
@@ -97,21 +109,53 @@ class OpenAIClient(LLMClient):
                 "messages": [{"role": "user", "content": prompt}]
             }
             
+            # 合并 extra_body (优先使用 generation_config 中的，其次使用客户端默认的)
+            current_extra_body = None
+            if self.extra_body:
+                current_extra_body = dict(self.extra_body)
+
             if generation_config:
                 if "temperature" in generation_config:
                     params["temperature"] = generation_config["temperature"]
                 if "max_output_tokens" in generation_config:
                     params["max_tokens"] = generation_config["max_output_tokens"]
+                if "extra_body" in generation_config:
+                    if current_extra_body is None:
+                        current_extra_body = {}
+                    current_extra_body.update(generation_config["extra_body"])
+
+            if current_extra_body:
+                params["extra_body"] = current_extra_body
 
             response = self.client.chat.completions.create(**params)
             
-            content = response.choices[0].message.content
+            choice = response.choices[0]
+            message = choice.message
+            content = message.content
+
+            # 处理 content 为 None 的情况（例如某些本地模型将输出归入 reasoning_content 或 tool_calls，或输出被截断）
+            if content is None:
+                reasoning = getattr(message, 'reasoning_content', None)
+                if reasoning:
+                    logger.warning("模型返回的 content 为 None，已自动提取 reasoning_content 作为回复内容。")
+                    content = reasoning
+                elif getattr(message, 'tool_calls', None):
+                    logger.warning("模型返回了 tool_calls 而非 content，尝试提取参数。")
+                    try:
+                        content = message.tool_calls[0].function.arguments or ""
+                    except Exception:
+                        content = str(message.tool_calls)
+                else:
+                    logger.warning(f"模型返回的 message.content 为 None，finish_reason={choice.finish_reason}")
+                    content = ""
             
             # Log Token Usage
             usage = response.usage
-            logger.info(f"Token 使用统计: 提示词: {usage.prompt_tokens}, 输出: {usage.completion_tokens}, 总计: {usage.total_tokens}")
+            if usage:
+                logger.info(f"Token 使用统计: 提示词: {getattr(usage, 'prompt_tokens', 'N/A')}, 输出: {getattr(usage, 'completion_tokens', 'N/A')}, 总计: {getattr(usage, 'total_tokens', 'N/A')}")
             
-            logger.debug(f"API 响应输出 (RESPONSE OUTPUT):\n{content[:500]}...[已截断]")
+            preview = content[:500] if content else "(空内容)"
+            logger.debug(f"API 响应输出 (RESPONSE OUTPUT):\n{preview}...[已截断]")
             
             return content
         except Exception as e:
@@ -129,7 +173,8 @@ def get_llm_client(llm_config=None):
         'provider': 'openai', # 或 'gemini'
         'model': 'gpt-4o',
         'api_key': '...' (可选),
-        'base_url': '...' (可选)
+        'base_url': '...' (可选),
+        'extra_body': {...} (可选)
     }
     """
     if not llm_config:
@@ -150,7 +195,8 @@ def get_llm_client(llm_config=None):
     if provider == 'openai':
         base_url = llm_config.get('base_url') or get_env_val("OPENAI_BASE_URL")
         default_model = get_env_val("OPENAI_MODEL") or "gpt-4o"
-        return OpenAIClient(api_key=api_key, model_name=model or default_model, base_url=base_url)
+        extra_body = llm_config.get('extra_body')
+        return OpenAIClient(api_key=api_key, model_name=model or default_model, base_url=base_url, extra_body=extra_body)
     elif provider == 'gemini':
         base_url = llm_config.get('base_url') or get_env_val("GEMINI_BASE_URL")
         default_model = get_env_val("GEMINI_MODEL") or "gemini-3-flash-preview"
